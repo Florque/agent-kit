@@ -9,6 +9,24 @@ public protocol AgentHarnessProtocol: AnyObject, Sendable {
     func handle(message: String, state: State) async throws -> (result: AgentResult<Intent>, nextState: State)
 }
 
+// MARK: - Summarization Configuration
+public struct SummarizationConfiguration: Sendable, Equatable {
+    public var isEnabled: Bool
+    public var cadence: Int // Triggered on every X new user messages
+    
+    public init(isEnabled: Bool = true, cadence: Int = 1) {
+        self.isEnabled = isEnabled
+        self.cadence = max(1, cadence)
+    }
+    
+    public static let disabled = SummarizationConfiguration(isEnabled: false, cadence: 1)
+}
+
+// MARK: - Event Dispatcher
+final class EventDispatcher<Intent: AgentIntent>: @unchecked Sendable {
+    weak var listener: (any AgentEventListener<Intent>)?
+}
+
 // MARK: - Core Agent Harness (LangGraph Powered)
 /// Reusable agent harness that orchestrates state, routing, clarification, and specialist graph execution.
 public final class AgentHarness<ProjectSnapshot: Snapshot, Intent: AgentIntent>: AgentHarnessProtocol, @unchecked Sendable {
@@ -17,28 +35,77 @@ public final class AgentHarness<ProjectSnapshot: Snapshot, Intent: AgentIntent>:
     public typealias Clarification = any ClarificationHandler<Intent>
     public typealias Registry = AgentRegistry<ProjectSnapshot, Intent>
     public typealias ClarificationAgentType = any SpecialistAgent<ProjectSnapshot, Intent>
+    public typealias Summarizer = any SummarizationAgentProtocol
     
     public let router: Router
     public let clarificationHandler: Clarification
     public let registry: Registry
     public let clarificationAgent: ClarificationAgentType
+    public let summarizationAgent: Summarizer?
+    public let summarizationConfiguration: SummarizationConfiguration
     
+    private let dispatcher: EventDispatcher<Intent>
     private let compiledGraph: CompiledGraph<State>
-    public weak var eventListener: (any AgentEventListener<Intent>)?
+    
+    public var eventListener: (any AgentEventListener<Intent>)? {
+        get { dispatcher.listener }
+        set { dispatcher.listener = newValue }
+    }
     
     public init(
         router: Router,
         clarificationHandler: Clarification,
         registry: Registry,
-        clarificationAgent: ClarificationAgentType
+        clarificationAgent: ClarificationAgentType,
+        summarizationAgent: Summarizer? = nil,
+        summarizationCadence: Int = 1,
+        isSummarizationEnabled: Bool = true
     ) {
         self.router = router
         self.clarificationHandler = clarificationHandler
         self.registry = registry
         self.clarificationAgent = clarificationAgent
+        self.summarizationAgent = summarizationAgent
+        let summarizerConfig = SummarizationConfiguration(
+            isEnabled: isSummarizationEnabled && summarizationAgent != nil,
+            cadence: summarizationCadence
+        )
+        self.summarizationConfiguration = summarizerConfig
+        
+        let dispatcher = EventDispatcher<Intent>()
+        self.dispatcher = dispatcher
         
         // Build the LangGraph StateGraph
         let graph = StateGraph<State>()
+        
+        // MARK: - Summarizer Node
+        let summarizerRef = summarizationAgent
+        graph.addNode("summarizer") { [weak summarizerRef, weak dispatcher] state in
+            guard summarizerConfig.isEnabled, let summarizer = summarizerRef else {
+                return state
+            }
+            
+            let summarizedIDs = Set(state.summarizedConversation.ids)
+            let unsummarizedUserCount = state.messages.filter { $0.role == "user" && !summarizedIDs.contains($0.id) }.count
+            
+            guard unsummarizedUserCount >= summarizerConfig.cadence else {
+                return state
+            }
+            
+            var nextState = state
+            do {
+                let newSummary = try await summarizer.summarize(
+                    messages: state.messages,
+                    existingSummary: state.summarizedConversation
+                )
+                nextState.summarizedConversation = newSummary
+                dispatcher?.listener?.onEvent(.summarizationCompleted(summary: newSummary))
+            } catch {
+                dispatcher?.listener?.onEvent(.errorEncountered(error: error))
+            }
+            return nextState
+        }
+        graph.addEdge(from: "summarizer", to: "router")
         
         // MARK: - Router Node
         graph.addNode("router") { [weak router, weak clarificationHandler] state in
@@ -106,7 +173,8 @@ public final class AgentHarness<ProjectSnapshot: Snapshot, Intent: AgentIntent>:
         graph.addEdge(from: "specialist_fallback", to: StateGraphConstants.end)
         
         // MARK: - Routing Conditional Edge
-        graph.setEntryPoint("router")
+        graph.setEntryPoint("summarizer")
+
         let registeredIntents = Set(registry.registeredIntents)
         graph.addConditionalEdge(from: "router") { state in
             if state.pendingClarification != nil {
@@ -133,6 +201,25 @@ public final class AgentHarness<ProjectSnapshot: Snapshot, Intent: AgentIntent>:
         } catch {
             fatalError("Failed to compile AgentHarness StateGraph: \(error)")
         }
+    }
+    
+    public convenience init(
+        router: Router,
+        clarificationHandler: Clarification,
+        registry: Registry,
+        clarificationAgent: ClarificationAgentType,
+        summarizationAgent: Summarizer?,
+        summarizationConfiguration: SummarizationConfiguration
+    ) {
+        self.init(
+            router: router,
+            clarificationHandler: clarificationHandler,
+            registry: registry,
+            clarificationAgent: clarificationAgent,
+            summarizationAgent: summarizationAgent,
+            summarizationCadence: summarizationConfiguration.cadence,
+            isSummarizationEnabled: summarizationConfiguration.isEnabled
+        )
     }
     
     public func handle(message: String, state: State) async throws -> (result: AgentResult<Intent>, nextState: State) {

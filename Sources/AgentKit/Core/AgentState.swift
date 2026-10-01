@@ -71,9 +71,36 @@ public struct PendingClarification<Intent: AgentIntent>: Codable, Equatable, Sen
     }
 }
 
+public struct ConversationSummary: Sendable, Codable, Equatable {
+    public let ids: [UUID]
+    public let text: String
+    public let extractedValues: [String: String]
+
+    public init(
+        ids: [UUID] = [],
+        text: String = "",
+        extractedValues: [String: String] = [:]
+    ) {
+        self.ids = ids
+        self.text = text
+        self.extractedValues = extractedValues
+    }
+
+    public static let empty = ConversationSummary(ids: [], text: "", extractedValues: [:])
+
+    public var isEmpty: Bool {
+        ids.isEmpty && text.isEmpty && extractedValues.isEmpty
+    }
+}
+
+// Deprecated typealias for backwards compatibility
+@available(*, deprecated, renamed: "ConversationSummary")
+public typealias ChatMessagesSummary = ConversationSummary
+
 // MARK: - Core Shared AgentState
 public struct AgentState<ProjectSnapshot: Snapshot, Intent: AgentIntent>: Codable, Sendable {
     public var messages: [ChatMessage]
+    public var summarizedConversation: ConversationSummary
     public var project: ProjectSnapshot?
     public var pendingClarification: PendingClarification<Intent>?
     public var routing: RoutingDecision<Intent>?
@@ -84,6 +111,7 @@ public struct AgentState<ProjectSnapshot: Snapshot, Intent: AgentIntent>: Codabl
     
     public init(
         messages: [ChatMessage] = [],
+        summarizedConversation: ConversationSummary = .empty,
         project: ProjectSnapshot? = nil,
         pendingClarification: PendingClarification<Intent>? = nil,
         routing: RoutingDecision<Intent>? = nil,
@@ -93,6 +121,7 @@ public struct AgentState<ProjectSnapshot: Snapshot, Intent: AgentIntent>: Codabl
         error: String? = nil
     ) {
         self.messages = messages
+        self.summarizedConversation = summarizedConversation
         self.project = project
         self.pendingClarification = pendingClarification
         self.routing = routing
@@ -144,6 +173,7 @@ public struct AgentResult<Intent: AgentIntent>: Sendable {
 public struct PersistedAgentSession<Intent: AgentIntent>: Codable, Sendable {
     public let sessionID: String
     public var messages: [ChatMessage]
+    public var summarizedConversation: ConversationSummary
     public var projectID: String?
     public var pendingClarification: PendingClarification<Intent>?
     public var routing: RoutingDecision<Intent>?
@@ -152,6 +182,7 @@ public struct PersistedAgentSession<Intent: AgentIntent>: Codable, Sendable {
     public init(
         sessionID: String = UUID().uuidString,
         messages: [ChatMessage],
+        summarizedConversation: ConversationSummary = .empty,
         projectID: String? = nil,
         pendingClarification: PendingClarification<Intent>? = nil,
         routing: RoutingDecision<Intent>? = nil,
@@ -159,6 +190,7 @@ public struct PersistedAgentSession<Intent: AgentIntent>: Codable, Sendable {
     ) {
         self.sessionID = sessionID
         self.messages = messages
+        self.summarizedConversation = summarizedConversation
         self.projectID = projectID
         self.pendingClarification = pendingClarification
         self.routing = routing

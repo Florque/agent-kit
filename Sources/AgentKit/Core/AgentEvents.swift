@@ -37,6 +37,7 @@ public enum AgentHarnessEvent<Intent: AgentIntent>: Sendable {
     case clarificationResolved(intent: Intent)
     case specialistStarted(intent: Intent)
     case specialistCompleted(intent: Intent, result: AgentResult<Intent>)
+    case summarizationCompleted(summary: ConversationSummary)
     case errorEncountered(error: Error)
 }
 

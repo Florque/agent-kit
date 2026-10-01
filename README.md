@@ -16,6 +16,7 @@ A modular, type-safe **LangGraph-inspired Agent Orchestration Harness** for Swif
 
 - **Shared State Architecture (`AgentState<Snapshot, Intent>`)**:
   - Unified state across all graph nodes containing conversation history (`[ChatMessage]`), contextual snapshots (`Snapshot`), routing decisions, and clarification state.
+  - Hybrid advanced conversation summarization keeping context compact
 
 - **Hybrid Routing Engine (`AgentRouter`)**:
   - Layered routing: deterministic heuristics evaluate first for instant, zero-cost routing, while ambiguous requests fall back to structured LLM classification.
